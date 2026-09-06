@@ -1,16 +1,19 @@
 import express from "express";
-
 import {
-    traceBillet
+    traceBillet,
+    traceHeat
 } from "../controllers/traceability.controller.js";
 
 const router = express.Router();
-
 
 router.get(
     "/billet/:billetNo",
     traceBillet
 );
 
+router.get(
+    "/heat/:heatNo",
+    traceHeat
+);
 
-export default router;
+export default router;

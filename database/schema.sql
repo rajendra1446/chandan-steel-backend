@@ -301,3 +301,13 @@ CREATE TABLE production_outputs (
     FOREIGN KEY (product_id)
         REFERENCES products(id)
 );
+
+-- =========================================
+-- 12. PERFORMANCE INDEXES
+-- =========================================
+CREATE INDEX IF NOT EXISTS idx_billets_heat_id ON billets(heat_id);
+CREATE INDEX IF NOT EXISTS idx_billet_transfers_billet_id ON billet_transfers(billet_id);
+CREATE INDEX IF NOT EXISTS idx_heat_materials_heat_id ON heat_materials(heat_id);
+CREATE INDEX IF NOT EXISTS idx_production_inputs_billet_id ON production_inputs(billet_id);
+CREATE INDEX IF NOT EXISTS idx_production_inputs_batch_id ON production_inputs(production_batch_id);
+CREATE INDEX IF NOT EXISTS idx_production_outputs_batch_id ON production_outputs(production_batch_id);

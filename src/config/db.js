@@ -10,6 +10,10 @@ const pool = new Pool({
     ssl: {
         rejectUnauthorized: false,
     },
+    max: 10,
+    min: 2,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
 });
 pool.on("connect", () => {
     console.log("PostgreSQL connected");

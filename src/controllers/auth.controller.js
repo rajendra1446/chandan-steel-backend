@@ -43,7 +43,7 @@ export const register = async (req, res) => {
                 name,
                 email,
                 passwordHash,
-                "USER",
+                "ADMIN",
                 unit_id || null
             ]
         );

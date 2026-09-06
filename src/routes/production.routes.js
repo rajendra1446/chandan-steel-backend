@@ -3,7 +3,8 @@ import express from "express";
 import {
     getProductionBatches,
     createProductionBatch,
-    addProductionInput
+    addProductionInput,
+    addProductionOutput
 } from "../controllers/production.controller.js";
 
 const router = express.Router();
@@ -23,4 +24,9 @@ router.post(
     addProductionInput
 );
 
-export default router;
+router.post(
+    "/:batchId/outputs",
+    addProductionOutput
+);
+
+export default router;

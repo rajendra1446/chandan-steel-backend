@@ -11,27 +11,22 @@ export const getBillets = async (req, res, next) => {
 
         const result = await pool.query(`
             SELECT
-
                 b.id,
                 b.billet_no,
                 b.quantity,
+                COALESCE(SUM(pi.quantity), 0) AS consumed_quantity,
+                GREATEST(0, b.quantity - COALESCE(SUM(pi.quantity), 0)) AS remaining_quantity,
                 b.unit,
                 b.production_date,
                 b.status,
-
                 h.heat_no,
-
                 g.grade_code,
                 g.grade_name
-
             FROM billets b
-
-            JOIN heats h
-                ON b.heat_id = h.id
-
-            JOIN grades g
-                ON b.grade_id = g.id
-
+            JOIN heats h ON b.heat_id = h.id
+            JOIN grades g ON b.grade_id = g.id
+            LEFT JOIN production_inputs pi ON b.id = pi.billet_id
+            GROUP BY b.id, h.heat_no, g.grade_code, g.grade_name
             ORDER BY b.id DESC
         `);
 
