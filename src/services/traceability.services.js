@@ -30,8 +30,9 @@ export const getBilletTraceability = async (billetNo) => {
         FROM billets b
         JOIN heats h ON b.heat_id = h.id
         JOIN grades g ON b.grade_id = g.id
-        JOIN units u ON h.unit_id = u.id
-        WHERE b.billet_no = $1
+        LEFT JOIN units u ON h.unit_id = u.id
+        WHERE b.billet_no ILIKE $1 OR b.id::text = $1
+        LIMIT 1
     `, [billetNo]);
 
     if (billetResult.rows.length === 0) {
@@ -190,8 +191,9 @@ export const getHeatTraceability = async (heatNo) => {
 
         FROM heats h
         JOIN grades g ON h.grade_id = g.id
-        JOIN units u ON h.unit_id = u.id
-        WHERE h.heat_no = $1
+        LEFT JOIN units u ON h.unit_id = u.id
+        WHERE h.heat_no ILIKE $1 OR h.id::text = $1
+        LIMIT 1
     `, [heatNo]);
 
     if (heatResult.rows.length === 0) {
