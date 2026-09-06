@@ -364,6 +364,8 @@ export const getHeatTraceability = async (heatNo) => {
             unit: heat.unit || "KG",
             status: heat.status,
             remarks: heat.remarks,
+            grade_code: heat.grade_code,
+            grade_name: heat.grade_name,
             grade: {
                 id: heat.grade_id,
                 code: heat.grade_code,
