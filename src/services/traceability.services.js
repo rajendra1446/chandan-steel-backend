@@ -41,8 +41,8 @@ export const getBilletTraceability = async (billetNo) => {
 
     const billet = billetResult.rows[0];
 
-    // 2. Fetch materials, transfers, and production IN PARALLEL for max performance
-    const [materialResult, transferResult, productionResult] = await Promise.all([
+    // 2. Fetch materials, transfers, production, and rejections IN PARALLEL for max performance
+    const [materialResult, transferResult, productionResult, rejectionResult] = await Promise.all([
         pool.query(`
             SELECT
                 hm.id,
@@ -62,6 +62,7 @@ export const getBilletTraceability = async (billetNo) => {
         pool.query(`
             SELECT
                 bt.id,
+                bt.transfer_manifest_no,
                 fu.unit_code AS from_unit,
                 fu.unit_name AS from_unit_name,
                 tu.unit_code AS to_unit,
@@ -69,6 +70,9 @@ export const getBilletTraceability = async (billetNo) => {
                 bt.quantity,
                 bt.transfer_date,
                 bt.transfer_type,
+                bt.carrier_vehicle_no,
+                bt.weighbridge_slip_no,
+                bt.status,
                 bt.remarks
             FROM billet_transfers bt
             LEFT JOIN units fu ON bt.from_unit_id = fu.id
@@ -90,7 +94,11 @@ export const getBilletTraceability = async (billetNo) => {
                 p.product_code,
                 p.product_name,
                 p.product_type,
-                po.quantity AS product_quantity
+                po.lot_number,
+                po.bundle_no,
+                po.pieces_count,
+                po.quantity AS product_quantity,
+                po.qa_release_status
             FROM production_inputs pi
             JOIN production_batches pb ON pi.production_batch_id = pb.id
             JOIN units u ON pb.unit_id = u.id
@@ -98,6 +106,26 @@ export const getBilletTraceability = async (billetNo) => {
             LEFT JOIN products p ON po.product_id = p.id
             WHERE pi.billet_id = $1
             ORDER BY pb.production_date
+        `, [billet.billet_id]),
+
+        pool.query(`
+            SELECT
+                pr.id,
+                pr.rejection_quantity,
+                pr.rejection_category,
+                pr.rejection_reason,
+                pr.defect_location,
+                pr.disposition,
+                pr.inspector_id,
+                pr.inspected_at,
+                pb.batch_no,
+                p.product_code,
+                p.product_name
+            FROM production_rejections pr
+            JOIN production_batches pb ON pr.production_batch_id = pb.id
+            LEFT JOIN products p ON pr.product_id = p.id
+            WHERE pr.billet_id = $1
+            ORDER BY pr.inspected_at DESC
         `, [billet.billet_id])
     ]);
 
@@ -108,21 +136,139 @@ export const getBilletTraceability = async (billetNo) => {
     );
     const remainingQty = Math.max(0, initialQty - consumedQty);
 
-    // Production scrap
+    // Production scrap from batch inputs vs outputs
     const seenBatches = new Set();
-    let productionScrap = 0;
+    let productionBatchScrap = 0;
     productionResult.rows.forEach(p => {
         if (!seenBatches.has(p.batch_id)) {
             seenBatches.add(p.batch_id);
             const bIn = parseFloat(p.batch_input_qty || 0);
             const bOut = parseFloat(p.batch_output_qty || 0);
-            if (bIn > bOut) productionScrap += (bIn - bOut);
+            if (bIn > bOut) productionBatchScrap += (bIn - bOut);
         }
     });
+
+    // Explicit rejections logged
+    const loggedRejectionsQty = rejectionResult.rows.reduce(
+        (sum, r) => sum + parseFloat(r.rejection_quantity || 0),
+        0
+    );
 
     const heatInput = parseFloat(billet.heat_input_qty || 0);
     const heatOutput = parseFloat(billet.heat_output_qty || 0);
     const heatMeltLoss = Math.max(0, heatInput - heatOutput);
+    const heatMeltLossShare = heatOutput > 0 ? parseFloat(((initialQty / heatOutput) * heatMeltLoss).toFixed(2)) : 0;
+
+    // Finished product outputs produced
+    const finishedProductsProduced = productionResult.rows.filter(p => p.product_name);
+    const finishedProductsQty = finishedProductsProduced.reduce(
+        (sum, p) => sum + parseFloat(p.product_quantity || 0),
+        0
+    );
+
+    // Rejection categorization
+    const scaleLoss = rejectionResult.rows
+        .filter(r => r.rejection_category === "PROCESS_BURNING_SCALE")
+        .reduce((sum, r) => sum + parseFloat(r.rejection_quantity || 0), 0);
+    const endCutScrap = rejectionResult.rows
+        .filter(r => r.rejection_category === "SHEARING_END_CUT")
+        .reduce((sum, r) => sum + parseFloat(r.rejection_quantity || 0), 0);
+    const recycledSmsScrap = rejectionResult.rows
+        .filter(r => r.disposition === "RECYCLE_TO_SMS")
+        .reduce((sum, r) => sum + parseFloat(r.rejection_quantity || 0), 0);
+
+    const totalScrapAndLoss = loggedRejectionsQty > 0 ? loggedRejectionsQty : productionBatchScrap;
+
+    // 12-Point Management Audit Blueprint
+    const auditSummary = {
+        grade_produced: {
+            code: billet.grade_code,
+            name: billet.grade_name,
+        },
+        heat_number: {
+            heat_no: billet.heat_no,
+            heat_date: billet.heat_date,
+            melt_shop: billet.heat_unit_name || billet.heat_unit || "SMS",
+            total_input_qty: heatInput,
+            total_output_qty: heatOutput,
+        },
+        raw_materials_used: materialResult.rows.map(m => ({
+            code: m.material_code,
+            name: m.material_name,
+            type: m.material_type,
+            quantity: parseFloat(m.quantity || 0),
+            unit: m.unit,
+        })),
+        billet_produced_qty: {
+            cast_weight: initialQty,
+            current_remaining: remainingQty,
+            unit: billet.billet_unit,
+            production_date: billet.production_date,
+        },
+        manufacturing_units_received: [
+            ...new Set([
+                billet.heat_unit_name || billet.heat_unit || "Steel Melting Shop",
+                ...transferResult.rows.map(t => t.to_unit_name || t.to_unit).filter(Boolean),
+                ...productionResult.rows.map(p => p.unit_name || p.unit_code).filter(Boolean)
+            ])
+        ],
+        transferred_qty_by_unit: transferResult.rows.map(t => ({
+            from_unit: t.from_unit_name || t.from_unit,
+            to_unit: t.to_unit_name || t.to_unit,
+            quantity: parseFloat(t.quantity || 0),
+            transfer_date: t.transfer_date,
+            manifest_no: t.transfer_manifest_no,
+            vehicle_no: t.carrier_vehicle_no,
+        })),
+        products_manufactured: [
+            ...new Set(finishedProductsProduced.map(p => p.product_name))
+        ],
+        finished_product_qty: {
+            total_weight: finishedProductsQty,
+            unit: billet.billet_unit,
+            lots: finishedProductsProduced.map(p => ({
+                product_code: p.product_code,
+                product_name: p.product_name,
+                product_type: p.product_type,
+                lot_number: p.lot_number,
+                bundle_no: p.bundle_no,
+                pieces_count: p.pieces_count,
+                quantity: parseFloat(p.product_quantity || 0),
+                qa_status: p.qa_release_status || "APPROVED",
+            })),
+        },
+        material_rejected_qty: {
+            total_rejected_weight: loggedRejectionsQty,
+            rejection_count: rejectionResult.rows.length,
+            unit: billet.billet_unit,
+        },
+        rejection_reasons: rejectionResult.rows.map(r => ({
+            category: r.rejection_category,
+            reason: r.rejection_reason,
+            defect_location: r.defect_location,
+            quantity: parseFloat(r.rejection_quantity || 0),
+            disposition: r.disposition,
+            batch_no: r.batch_no,
+            inspector: r.inspector_id,
+            date: r.inspected_at,
+        })),
+        scrap_and_waste_qty: {
+            total_scrap_weight: totalScrapAndLoss,
+            reheating_scale_loss: scaleLoss,
+            crop_end_cut_scrap: endCutScrap,
+            recycled_to_sms_scrap: recycledSmsScrap,
+            heat_melt_loss_share: heatMeltLossShare,
+            unit: billet.billet_unit,
+        },
+        final_destination: {
+            status: billet.status,
+            remaining_stock_in_yard: remainingQty,
+            finished_products_destination: finishedProductsProduced.map(p => p.product_name),
+            disposition_summary: remainingQty > 0
+                ? `${consumedQty} KG consumed in rolling; ${remainingQty} KG available in stock.`
+                : `100% processed into ${finishedProductsProduced.length} finished product lots and recycled scrap.`,
+        }
+    };
 
     return {
         billet: {
@@ -139,9 +285,11 @@ export const getBilletTraceability = async (billetNo) => {
             initial_quantity: initialQty,
             consumed_quantity: consumedQty,
             remaining_quantity: remainingQty,
-            production_scrap: productionScrap,
+            production_scrap: totalScrapAndLoss,
             heat_melt_loss: heatMeltLoss,
-            total_material_rejected: heatMeltLoss + productionScrap,
+            total_material_rejected: loggedRejectionsQty,
+            recycled_sms_scrap: recycledSmsScrap,
+            finished_products_qty: finishedProductsQty,
             unit: billet.billet_unit
         },
         source: {
@@ -160,9 +308,12 @@ export const getBilletTraceability = async (billetNo) => {
             materials: materialResult.rows
         },
         transfers: transferResult.rows,
-        production: productionResult.rows
+        production: productionResult.rows,
+        rejections: rejectionResult.rows,
+        audit_answers: auditSummary
     };
 };
+
 
 // ==========================================
 // 2. FULL HEAT TRACEABILITY (ALL BILLETS)
@@ -242,10 +393,11 @@ export const getHeatTraceability = async (heatNo) => {
 
     let transfers = [];
     let production = [];
+    let rejections = [];
 
-    // 3. If billets exist, fetch their transfers & production in parallel
+    // 3. If billets exist, fetch their transfers, production & rejections in parallel
     if (billetIds.length > 0) {
-        const [transfersRes, productionRes] = await Promise.all([
+        const [transfersRes, productionRes, rejectionsRes] = await Promise.all([
             pool.query(`
                 SELECT
                     bt.id,
@@ -291,12 +443,37 @@ export const getHeatTraceability = async (heatNo) => {
                 LEFT JOIN products p ON po.product_id = p.id
                 WHERE pi.billet_id = ANY($1::int[])
                 ORDER BY pb.production_date
+            `, [billetIds]),
+
+            pool.query(`
+                SELECT
+                    pr.id,
+                    pr.billet_id,
+                    b.billet_no,
+                    pr.rejection_quantity,
+                    pr.rejection_category,
+                    pr.rejection_reason,
+                    pr.defect_location,
+                    pr.disposition,
+                    pr.inspector_id,
+                    pr.inspected_at,
+                    pb.batch_no,
+                    p.product_code,
+                    p.product_name
+                FROM production_rejections pr
+                JOIN billets b ON pr.billet_id = b.id
+                JOIN production_batches pb ON pr.production_batch_id = pb.id
+                LEFT JOIN products p ON pr.product_id = p.id
+                WHERE pr.billet_id = ANY($1::int[])
+                ORDER BY pr.inspected_at DESC
             `, [billetIds])
         ]);
 
         transfers = transfersRes.rows;
         production = productionRes.rows;
+        rejections = rejectionsRes.rows;
     }
+
 
     // 4. Map detailed traceability for each billet
     const detailedBillets = billets.map(b => {
@@ -392,6 +569,8 @@ export const getHeatTraceability = async (heatNo) => {
         materials: materialsResult.rows,
         billets: detailedBillets,
         transfers: transfers,
-        production: production
+        production: production,
+        rejections: rejections
     };
-};
+};
+

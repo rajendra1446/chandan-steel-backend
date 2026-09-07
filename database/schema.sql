@@ -289,9 +289,17 @@ CREATE TABLE production_outputs (
 
     product_id INTEGER NOT NULL,
 
+    lot_number VARCHAR(60),
+
+    bundle_no VARCHAR(50),
+
+    pieces_count INTEGER,
+
     quantity DECIMAL(14,3) NOT NULL,
 
     unit VARCHAR(20) DEFAULT 'KG',
+
+    qa_release_status VARCHAR(30) DEFAULT 'APPROVED',
 
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
@@ -303,11 +311,52 @@ CREATE TABLE production_outputs (
 );
 
 -- =========================================
--- 12. PERFORMANCE INDEXES
+-- 12. PRODUCTION REJECTIONS & SCRAP ACCOUNTING
+-- =========================================
+
+CREATE TABLE production_rejections (
+    id SERIAL PRIMARY KEY,
+
+    production_batch_id INTEGER NOT NULL,
+
+    billet_id INTEGER,
+
+    product_id INTEGER,
+
+    rejection_quantity DECIMAL(14,3) NOT NULL,
+
+    rejection_category VARCHAR(60) NOT NULL,
+
+    rejection_reason TEXT NOT NULL,
+
+    defect_location VARCHAR(100),
+
+    disposition VARCHAR(50) NOT NULL DEFAULT 'RECYCLE_TO_SMS',
+
+    inspector_id VARCHAR(50),
+
+    inspected_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (production_batch_id)
+        REFERENCES production_batches(id)
+        ON DELETE CASCADE,
+
+    FOREIGN KEY (billet_id)
+        REFERENCES billets(id),
+
+    FOREIGN KEY (product_id)
+        REFERENCES products(id)
+);
+
+-- =========================================
+-- 13. PERFORMANCE INDEXES
 -- =========================================
 CREATE INDEX IF NOT EXISTS idx_billets_heat_id ON billets(heat_id);
 CREATE INDEX IF NOT EXISTS idx_billet_transfers_billet_id ON billet_transfers(billet_id);
 CREATE INDEX IF NOT EXISTS idx_heat_materials_heat_id ON heat_materials(heat_id);
 CREATE INDEX IF NOT EXISTS idx_production_inputs_billet_id ON production_inputs(billet_id);
 CREATE INDEX IF NOT EXISTS idx_production_inputs_batch_id ON production_inputs(production_batch_id);
-CREATE INDEX IF NOT EXISTS idx_production_outputs_batch_id ON production_outputs(production_batch_id);
+CREATE INDEX IF NOT EXISTS idx_production_outputs_batch_id ON production_outputs(production_batch_id);
+CREATE INDEX IF NOT EXISTS idx_production_rejections_batch_id ON production_rejections(production_batch_id);
+CREATE INDEX IF NOT EXISTS idx_production_rejections_billet_id ON production_rejections(billet_id);
+

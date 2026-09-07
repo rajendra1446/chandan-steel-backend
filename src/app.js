@@ -10,10 +10,11 @@ import transferRoutes from "./routes/transfer.routes.js";
 import productionRoutes from "./routes/production.routes.js";
 import productRoutes from "./routes/product.routes.js";
 import traceabilityRoutes from "./routes/traceability.routes.js";
-import { authMiddleware } from "./middleware/auth.middleware.js";
-import router from "./routes/unit.routes.js";
+import aiRoutes from "./routes/ai.routes.js";
+import { authMiddleware, optionalAuthMiddleware } from "./middleware/auth.middleware.js";
 import authRouter from "./routes/auth.routes.js";
 const app = express();
+
 
 
 // ================================
@@ -64,7 +65,9 @@ app.use("/api/production",authMiddleware, productionRoutes);
 
 app.use("/api/products",authMiddleware, productRoutes);
 
-app.use("/api/traceability",authMiddleware, traceabilityRoutes);
+app.use("/api/traceability", optionalAuthMiddleware, traceabilityRoutes);
+
+app.use("/api/ai", optionalAuthMiddleware, aiRoutes);
 
 
 // ================================
